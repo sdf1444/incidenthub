@@ -1,0 +1,5 @@
+{
+  "name":"incidenthub","private":true,"workspaces":["apps/*"],
+  "scripts":{"dev":"concurrently \"npm run start:dev -w @incidenthub/api\" \"npm run dev -w @incidenthub/web\"","build":"npm run build -w @incidenthub/api && npm run build -w @incidenthub/web","test":"npm run test -w @incidenthub/api"},
+  "devDependencies":{"concurrently":"^9.1.2"}
+}
