@@ -1,10 +1,33 @@
 services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: incidenthub
+      MYSQL_USER: incidenthub
+      MYSQL_PASSWORD: incidenthub
+      MYSQL_ROOT_PASSWORD: root
+    ports: ["3306:3306"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+
   api:
     build: ./apps/api
     ports: ["3001:3001"]
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: incidenthub
+      DB_USER: incidenthub
+      DB_PASSWORD: incidenthub
+    depends_on: [db]
+
   web:
     build: ./apps/web
     ports: ["5173:5173"]
     environment:
       VITE_API_URL: http://localhost:3001
     depends_on: [api]
+
+volumes:
+  mysql_data:
