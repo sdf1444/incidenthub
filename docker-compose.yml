@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: incidenthub
+      POSTGRES_USER: incidenthub
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-incidenthub}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U incidenthub -d incidenthub"]
+      interval: 5s
+      retries: 20
+      timeout: 3s
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    ports: ["3001:3001"]
+    environment:
+      PORT: 3001
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: incidenthub
+      DB_USER: incidenthub
+      DB_PASSWORD: ${DB_PASSWORD:-incidenthub}
+      INCIDENT_WEBHOOK_URL: ${INCIDENT_WEBHOOK_URL:-}
+      INCIDENT_WEBHOOK_SECRET: ${INCIDENT_WEBHOOK_SECRET:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+    depends_on:
+      db: { condition: service_healthy }
+  outbox-worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: incidenthub
+      DB_USER: incidenthub
+      DB_PASSWORD: ${DB_PASSWORD:-incidenthub}
+      INCIDENT_WEBHOOK_SECRET: ${INCIDENT_WEBHOOK_SECRET:-}
+      OUTBOX_POLL_MS: ${OUTBOX_POLL_MS:-2000}
+    depends_on:
+      db: { condition: service_healthy }
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+    ports: ["5173:80"]
+    depends_on: [api]
+volumes:
+  postgres_data:

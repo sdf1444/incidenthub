@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: incidenthub
+          MYSQL_USER: incidenthub
+          MYSQL_PASSWORD: incidenthub
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Initialize MySQL schema
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot incidenthub < database/init/001_schema.sql
+          mysql -h 127.0.0.1 -uroot -proot incidenthub < database/init/002_outbox.sql
+          mysql -h 127.0.0.1 -uroot -proot incidenthub < database/init/003_outbox_claim_index.sql
+      - run: npm run build
+      - run: npm test
+        env:
+          RUN_MYSQL_TESTS: '1'
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_NAME: incidenthub
+          DB_USER: incidenthub
+          DB_PASSWORD: incidenthub
