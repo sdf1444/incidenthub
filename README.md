@@ -55,16 +55,9 @@ This is a personal portfolio project, not a production incident-response system.
 
 ## Durable transactional outbox (webhook integration)
 
-When `INCIDENT_WEBHOOK_URL` is configured on the **API**, each incident mutation inserts an immutable event snapshot into `webhook_outbox` **in the same MySQL transaction** as the incident and timeline changes. A separate `outbox-worker` service claims due events with `FOR UPDATE SKIP LOCKED`, posts the original JSON, and records success. It retries timeouts, network errors, HTTP 408/425/429 and 5xx with exponential backoff (5-minute ceiling). With the eight-attempt limit, actual scheduled delays are 1, 2, 4, 8, 16, 32 and 64 seconds; permanent HTTP 4xx and exhausted attempts enter `dead`. Each worker claims one event immediately before sending, using a 60-second lease. Claims reserve an attempt inside the transaction, so a crashed worker's rows become eligible again until eight reservations have been used. An expired final lease enters `dead` with an unknown delivery outcome. Crashes can therefore consume attempts without completing HTTP requests. This is **at-least-once delivery**, not exactly-once: receivers must deduplicate using the stable `x-incidenthub-event-id` header. HMAC-SHA256 signs the original JSON body when `INCIDENT_WEBHOOK_SECRET` is set.
+When `INCIDENT_WEBHOOK_URL` is configured on the **API**, each incident mutation inserts an immutable event snapshot into `webhook_outbox` **in the same PostgreSQL transaction** as the incident and timeline changes. A separate `outbox-worker` service claims due events with `FOR UPDATE SKIP LOCKED`, posts the original JSON, and records success. It retries timeouts, network errors, HTTP 408/425/429 and 5xx with exponential backoff (5-minute ceiling). With the eight-attempt limit, actual scheduled delays are 1, 2, 4, 8, 16, 32 and 64 seconds; permanent HTTP 4xx and exhausted attempts enter `dead`. Each worker claims one event immediately before sending, using a 60-second lease. Claims reserve an attempt inside the transaction, so a crashed worker's rows become eligible again until eight reservations have been used. An expired final lease enters `dead` with an unknown delivery outcome. Crashes can therefore consume attempts without completing HTTP requests. This is **at-least-once delivery**, not exactly-once: receivers must deduplicate using the stable `x-incidenthub-event-id` header. HMAC-SHA256 signs the original JSON body when `INCIDENT_WEBHOOK_SECRET` is set.
 
-**Existing MySQL volume:** Docker's `/docker-entrypoint-initdb.d` runs only for a newly initialized database. Apply the additive migration before starting the upgraded API/worker:
-
-```sh
-docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u"$MYSQL_USER" "$MYSQL_DATABASE"' < database/init/002_outbox.sql
-docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u"$MYSQL_USER" "$MYSQL_DATABASE"' < database/init/003_outbox_claim_index.sql
-```
-
-For a fresh database volume, all three SQL scripts run automatically. Do not delete existing volumes merely to apply the migration. `docker compose up --build` starts the API and worker. Set `INCIDENT_WEBHOOK_URL` in the API environment; the worker uses the destination stored with each event. If URL is empty, no events are enqueued. Inspect failures with `SELECT id,event_type,status,attempts,last_error FROM webhook_outbox ORDER BY created_at DESC;`. A dead-letter replay requires an explicit operator decision; after fixing the root cause, set `status='pending', attempts=0, next_attempt_at=NOW(3), lease_token=NULL` for a chosen ID.
+**Fresh database setup:** Docker's `/docker-entrypoint-initdb.d` runs all three SQL scripts automatically when the database volume is first initialized. `docker compose up --build` starts the API and worker. Set `INCIDENT_WEBHOOK_URL` in the API environment; the worker uses the destination stored with each event. If URL is empty, no events are enqueued. Inspect failures with `SELECT id,event_type,status,attempts,last_error FROM webhook_outbox ORDER BY created_at DESC;`. A dead-letter replay requires an explicit operator decision; after fixing the root cause, set `status='pending', attempts=0, next_attempt_at=NOW(), lease_token=NULL` for a chosen ID.
 
 **Limitations:** no hosted AWS deployment is claimed here. Local test results are in `AUDIT_AND_VERIFICATION.md`. Lease recovery can redeliver an event if a worker crashes after HTTP success but before recording success; consumers must be idempotent. There is no per-incident event-order guarantee. The 60s lease exceeds the 5s request timeout for ordinary operation, but a severely stalled process could still cause overlapping attempts. For production, restrict destination URLs to an administrator-approved allowlist and protect secrets/DB access.
 
@@ -75,7 +68,7 @@ Replay only a selected dead event after resolving the cause:
 
 ```sql
 UPDATE webhook_outbox
-SET status='pending', attempts=0, next_attempt_at=NOW(3), lease_token=NULL,
+SET status='pending', attempts=0, next_attempt_at=NOW(), lease_token=NULL,
     delivered_at=NULL, last_error=NULL
 WHERE id='REPLACE_WITH_EVENT_ID' AND status='dead';
 ```
