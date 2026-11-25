@@ -1,20 +1,68 @@
 # IncidentHub — full-stack incident-management portfolio project
 
-Personal project demonstrating a React/TypeScript frontend, NestJS/TypeScript REST API, **persistent PostgreSQL** storage, a signed outgoing webhook integration, Jest/Supertest tests, Docker Compose, and an **AWS ECS deployment template**.
+Personal project demonstrating a React/TypeScript frontend, NestJS/TypeScript REST API, **persistent PostgreSQL 17** storage, a signed outgoing webhook integration, Jest/Supertest tests, Docker Compose, and an **AWS ECS deployment template**.
+
+**[📚 Documentation](#documentation) | [🚀 Quick Start](#local-quick-start) | [⚙️ Configuration](#configuration) | [🧪 Testing](#testing) | [🆘 Troubleshooting](#troubleshooting)**
+
+## Prerequisites
+
+- **Node.js** v22+ (v24 recommended)
+- **npm** v11+
+- **Docker** & **Docker Compose** (for database)
+- **PostgreSQL 17** (via Docker, or standalone)
+- **Git**
 
 ## Local quick start
 
-Requires Docker Compose. Copy `.env.example` to `.env` and set local-only passwords and optional webhook configuration. Then:
+Requires Docker Compose. Copy `.env.example` to `.env` and set local-only passwords and optional webhook configuration:
 
 ```bash
+cp .env.example .env
+# Edit .env to set DB_PASSWORD and webhook configuration if desired
+```
+
+Then start the application:
+
+```bash
+npm install
 docker compose up --build
 ```
 
-Open http://localhost:5173 (frontend), http://localhost:3001/api/health (API health), and http://localhost:3001/api/incidents (API).
+Open in your browser:
+- **Frontend**: http://localhost:5173
+- **API Health**: http://localhost:3001/api/health
+- **API Incidents**: http://localhost:3001/api/incidents
 
-PostgreSQL schema is created automatically from all three scripts in `database/init/` **only when the database volume is first initialized**. If upgrading an existing Compose volume, apply the schema manually or recreate the volume **only if you accept losing its data**. Never use `docker compose down -v` on valuable data.
+PostgreSQL schema is created automatically from scripts in `database/init/` **only when the database volume is first initialized**. If upgrading an existing Compose volume, recreate it **only if you accept losing its data**. Never use `docker compose down -v` on valuable data.
 
-For local development outside Docker, start PostgreSQL using `docker compose up -d db`, run `npm ci`, then `npm run dev` from the root. The API defaults to localhost DB credentials shown in `.env.example`/Compose; adjust DB environment variables as necessary. Start delivery separately with `npm run worker` after `npm run build`. These Node commands do not automatically load `.env`; export the required variables first. Compose reads `.env` for interpolation.
+For local development outside Docker:
+
+```bash
+docker compose up -d db          # Start just the database
+npm ci
+npm run dev                       # Frontend + API
+# In another terminal:
+npm run worker                    # Outbox worker
+```
+
+The API defaults to localhost DB credentials in `.env.example`. These Node commands do not automatically load `.env`; export variables first if needed. `docker-compose` reads `.env` for interpolation.
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DB_PASSWORD` | No | `incidenthub` | PostgreSQL password |
+| `INCIDENT_WEBHOOK_URL` | No | *(disabled)* | Webhook receiver endpoint |
+| `INCIDENT_WEBHOOK_SECRET` | No | *(empty)* | HMAC-SHA256 signing secret |
+| `CORS_ORIGIN` | No | `http://localhost:5173` | Frontend CORS origin |
+| `VITE_API_URL` | No | `http://localhost:3001` | API URL for frontend |
+| `PORT` | No | `3001` | API server port |
+| `DB_HOST` | No | `localhost` | PostgreSQL host |
+| `DB_PORT` | No | `5432` | PostgreSQL port |
+| `DB_NAME` | No | `incidenthub` | Database name |
+| `DB_USER` | No | `incidenthub` | PostgreSQL user |
 
 ## API endpoints
 
@@ -27,6 +75,23 @@ For local development outside Docker, start PostgreSQL using `docker compose up 
 
 Writes to incident rows and timeline rows are wrapped in PostgreSQL transactions. Incident updates lock the row with `SELECT ... FOR UPDATE`; this prevents concurrent updates from interleaving their timeline changes. The service does **not** enforce a legal status-transition graph or idempotency keys.
 
+## Project Structure
+
+```
+incidenthub-main/
+├── apps/
+│   ├── api/              # NestJS REST API
+│   │   ├── src/          # TypeScript source
+│   │   └── test/         # Jest test suites
+│   └── web/              # React/TypeScript frontend
+│       └── src/          # Vite app source
+├── database/init/        # PostgreSQL initialization scripts
+├── deploy/aws/           # ECS Fargate task definition template
+├── scripts/              # Utility scripts (smoke tests)
+├── docker-compose.yml    # Services: PostgreSQL, API, worker, frontend
+└── README.md             # This file
+```
+
 ## Webhook integration
 
 Set `INCIDENT_WEBHOOK_URL` to an operator-controlled HTTPS webhook receiver. On incident creation, update, or timeline append, the API durably queues a JSON payload with `id`, `type`, `occurredAt`, and `incident`. Set `INCIDENT_WEBHOOK_SECRET` to sign the exact JSON body with HMAC SHA-256 in the `x-incidenthub-signature` header (`sha256=<hex>`). Verify the signature on the receiving system before trusting payloads.
@@ -37,13 +102,20 @@ The API commits incident changes and the event atomically. A separate worker del
 
 ```bash
 npm ci
-npm test                    # controller, webhook and worker tests; PostgreSQL integration skipped
-RUN_POSTGRES_TESTS=1 npm test  # isolated PostgreSQL test DB, all migrations, no running worker
+npm test                        # Controller, webhook, and worker tests
+RUN_POSTGRES_TESTS=1 npm test   # With PostgreSQL integration tests (isolated DB required)
 npm run build
-npm run test:process        # same isolated DB; starts compiled API + worker and failing receiver
+npm run test:process            # Smoke test: compiled API + worker with real HTTP
 ```
 
-GitHub Actions CI starts PostgreSQL, initializes schema, builds both applications and runs all tests. The workflow itself has not been executed on GitHub; local verification is recorded in `AUDIT_AND_VERIFICATION.md`. Integration tests use a local HTTP receiver and intentionally fail if the outbox is not empty; use an isolated test database.
+GitHub Actions CI starts PostgreSQL, initializes schema, builds both applications, and runs all tests. Integration tests use a local HTTP receiver and intentionally fail if the outbox is not empty; use an isolated test database.
+
+**Note:** `RUN_POSTGRES_TESTS=1` requires a dedicated test database with an empty outbox and no other workers running.
+
+## Documentation
+
+- **[MIGRATION_TO_POSTGRESQL.md](MIGRATION_TO_POSTGRESQL.md)** — Detailed database migration guide (MySQL 8.0 → PostgreSQL 17)
+- **[POSTGRESQL_QUICK_REFERENCE.md](POSTGRESQL_QUICK_REFERENCE.md)** — PostgreSQL syntax and troubleshooting reference for developers
 
 ## AWS
 
@@ -52,6 +124,82 @@ See `deploy/aws/README.md` for prerequisites and the ECS Fargate task definition
 ## Scope and limitations
 
 This is a personal portfolio project, not a production incident-response system. It does not currently provide authentication, authorization, tenant isolation, audit actor identities, a transition state machine, unlimited webhook retries, full frontend test coverage, or a production deployment. The frontend displays incident counts computed from its list, rather than consuming the dashboard summary endpoint.
+
+## Troubleshooting
+
+### "Cannot find type definition file for 'jest'" / 'node'
+
+TypeScript is looking for type stubs in `@types/*`. Reinstall dependencies:
+
+```bash
+npm ci
+```
+
+If persisting, run from the **root directory** (not `apps/api/`), because TypeScript resolution follows `tsconfig.json` hierarchy upward.
+
+### "ECONNREFUSED 127.0.0.1:5432"
+
+PostgreSQL is not running or not on port 5432. Verify:
+
+```bash
+docker ps | grep postgres
+# Or, if running locally:
+psql -U incidenthub -h localhost -d incidenthub -c "SELECT 1"
+```
+
+If using Docker Compose, ensure the database service started:
+
+```bash
+docker compose logs db
+docker compose restart db
+```
+
+### "Incident already in state X" or state-transition errors
+
+The application does not enforce a predefined state graph. Any state can transition to any other state via PATCH. If you need constraints, add them in `incidents.service.ts` or the database schema.
+
+### "Outbox worker is not delivering webhooks"
+
+Verify the worker is running:
+
+```bash
+npm run worker    # or docker compose logs worker
+```
+
+Check the outbox table for stuck records:
+
+```bash
+docker exec -it incidenthub-postgres psql -U incidenthub -c "SELECT id, incident_id, status, created_at FROM webhook_outbox ORDER BY created_at DESC LIMIT 5;"
+```
+
+If `status = 'processing'` for many seconds, the worker crashed; check logs and restart. If `status = 'pending'`, the webhook URL may be invalid or unreachable.
+
+### React app shows "Failed to fetch"
+
+The frontend cannot reach the API. Check:
+
+1. API is running: `curl http://localhost:3001/api/health`
+2. `VITE_API_URL` in `.env` matches the frontend's view of the API location
+3. `CORS_ORIGIN` in `.env` (default: `http://localhost:5173`) matches the frontend's origin
+4. No proxy is misconfigured
+
+### Docker Compose fails to build
+
+Check Docker version (minimum 20.10), Compose version (minimum 2.0), and disk space:
+
+```bash
+docker --version
+docker compose version
+df -h
+```
+
+If a service log shows an error, inspect it:
+
+```bash
+docker compose logs <service-name>
+docker compose down  # Clean up
+docker compose up --build --force-recreate
+```
 
 ## Durable transactional outbox (webhook integration)
 
